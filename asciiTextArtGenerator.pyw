@@ -39,8 +39,8 @@ class ProcessingThread(QThread):
 
 class MainWindow(QDialog):
     __slots__ = (
-        "background",
-        "foreground",
+        "backgroundColor",
+        "foregroundColor",
     )
 
     def __init__(self) -> None:
@@ -48,7 +48,8 @@ class MainWindow(QDialog):
 
         def changeColor(forBackground: bool = False) -> None:
             color = QColorDialog.getColor(
-                (self.background if forBackground else self.foreground),
+                (self.backgroundColor
+                 if forBackground else self.foregroundColor),
                 title=
                 f"Select {'Background' if forBackground else 'Foreground'}",
                 options=QColorDialog.ColorDialogOption.ShowAlphaChannel)
@@ -61,11 +62,11 @@ class MainWindow(QDialog):
                 f"QLabel {{ color: transparent; background-color: rgba{color.getRgb()}; }}"
             )
 
-            if forBackground: self.background = color
-            else: self.foreground = color
+            if forBackground: self.backgroundColor = color
+            else: self.foregroundColor = color
 
             generatedTextWindow.setStyleSheet(
-                f"QPlainTextEdit {{ background-color: rgba{self.background.getRgb()}; color: rgba{self.foreground.getRgb()}; border: none; }}"
+                f"QPlainTextEdit {{ background-color: rgba{self.backgroundColor.getRgb()}; color: rgba{self.foregroundColor.getRgb()}; border: none; }}"
             )
 
         def resultReady(result: str) -> None:
@@ -205,9 +206,9 @@ def saveGeneratedText() -> None:
         0, generatedTextWindow.toPlainText()))
     painter = QPainter(pixmap)
 
-    painter.fillRect(pixmap.rect(), mainWindow.background)
+    painter.fillRect(pixmap.rect(), mainWindow.backgroundColor)
     painter.setFont(generatedTextWindow.font())
-    painter.setPen(mainWindow.foreground)
+    painter.setPen(mainWindow.foregroundColor)
 
     painter.drawText(pixmap.rect(), 0, generatedTextWindow.toPlainText())
 
@@ -227,7 +228,7 @@ mainWindow, generatedTextWindow = MainWindow(), QPlainTextEdit(
     windowTitle="Generated ASCII Text Art",
     readOnly=True,
     lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap,
-    font=QFont("Consolas", 12),
+    font=QFont("Consolas", 1),
     styleSheet="QPlainTextEdit { border: none; }",
     contextMenuPolicy=Qt.ContextMenuPolicy.CustomContextMenu,
     customContextMenuRequested=contextMenuRequested)
