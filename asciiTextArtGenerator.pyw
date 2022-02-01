@@ -1,149 +1,237 @@
 # -*- coding: utf-8 -*-
 
-from PyQt6.QtWidgets import (QColorDialog, QFrame, QLabel, QGridLayout,
-                             QComboBox, QLineEdit, QSpinBox, QPlainTextEdit,
-                             QPushButton, QApplication, QDialog, QTextEdit)
-from PyQt6.QtCore import QThread, pyqtSignal, QSize, Qt
-from PIL import Image, ImageDraw, ImageFont
-from numpy import uint8, array
-from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (QColorDialog, QMenu, QFontDialog, QMessageBox,
+                             QFileDialog, QLabel, QVBoxLayout, QPlainTextEdit,
+                             QPushButton, QApplication, QDialog)
+from PyQt6.QtGui import (QKeySequence, QFont, QImage, QColor, QPainter,
+                         QAction, QPixmap, QImageWriter, QShortcut)
+from PyQt6.QtCore import QThread, Qt, pyqtSignal, QPoint, QFile
+from typing import Callable
 
 
-class TextThread(QThread):
+class ProcessingThread(QThread):
     __slots__ = (
-        "fontSize",
-        "text",
-        "char",
+        "asciiCharacters",
+        "image",
     )
-    onReady = pyqtSignal(str)
+    onResultReady = pyqtSignal(str)
 
-    def __init__(self, onReady: "function",
-                 setDisabledFunction: "function") -> None:
-        super().__init__(started=lambda: setDisabledFunction(True),
-                         finished=lambda: setDisabledFunction(False))
-        self.fontSize, self.text, self.char = 12, "Hello World!", "#"
-        self.onReady.connect(onReady)
+    def __init__(self, onResultReady: Callable) -> None:
+        super().__init__()
 
-    def start(self, fontSize: int, text: str, char: str) -> None:
-        self.fontSize, self.text, self.char = fontSize, text, char
+        self.asciiCharacters, self.image = [
+            "@", "#", "$", "%", "?", "*", "+", ";", ":", ",", " "
+        ], None
+        self.onResultReady.connect(onResultReady)
+
+    def start(self, image: QImage) -> None:
+        self.image = image
         super().start()
 
     def run(self) -> None:
-        font = ImageFont.truetype("verdanab.ttf", self.fontSize)
-        img = Image.new("1", font.getsize(self.text), "black")
-        ImageDraw.Draw(img).text((0, 0), self.text, "white", font=font)
-
-        chars = array([" ", self.char], dtype="U1")[array(img, dtype=uint8)]
-        self.onReady.emit("\n".join(
-            x for x in chars.view("U" + str(chars.shape[1])).flatten()
-            if x.strip()))
+        self.onResultReady.emit("".join(
+            w.rstrip() + "\n" for w in ("".join(
+                self.asciiCharacters[self.image.pixelColor(x, y).value() // 25]
+                for x in range(self.image.width()))
+                                        for y in range(self.image.height()))
+            if w.strip()))
 
 
-class Main(QDialog):
-    __slots__ = ("textThread", )
+class MainWindow(QDialog):
+    __slots__ = (
+        "background",
+        "foreground",
+    )
 
     def __init__(self) -> None:
         super().__init__()
 
-        def mousePressEvent(background_: bool = False) -> None:
+        def changeColor(forBackground: bool = False) -> None:
             color = QColorDialog.getColor(
+                (self.background if forBackground else self.foreground),
+                title=
+                f"Select {'Background' if forBackground else 'Foreground'}",
                 options=QColorDialog.ColorDialogOption.ShowAlphaChannel)
             if not color.isValid(): return
 
-            (background if background_ else foreground).setStyleSheet(
-                "QLabel { color: transparent; background-color: rgba%s; }" %
-                str(color.getRgb()))
-            (background if background_ else foreground).setText(
-                str(color.getRgb()).strip("(").strip(",)"))
-
-        def onReady(result: str) -> None:
-            textWindow.setPlainText(result)
-            textWindow.setAlignment(
-                getattr(Qt.AlignmentFlag, f"Align{alignment1.currentText()}")
-                | getattr(Qt.AlignmentFlag, f"Align{alignment2.currentText()}")
+            (
+                backgroundColorPicker
+                if forBackground else foregroundColorPicker
+            ).setStyleSheet(
+                f"QLabel {{ color: transparent; background-color: rgba{color.getRgb()}; }}"
             )
 
-            if background.text().strip() and foreground.text().strip():
-                textWindow.setStyleSheet(
-                    "QTextEdit { background-color: rgba(%s); color: rgba(%s); border: none; }"
-                    % (
-                        background.text().strip(),
-                        foreground.text().strip(),
-                    ))
-            elif background.text().strip():
-                textWindow.setStyleSheet(
-                    "QTextEdit { background-color: rgba(%s); border: none; }" %
-                    background.text().strip())
-            elif foreground.text().strip():
-                textWindow.setStyleSheet(
-                    "QTextEdit { color: rgba(%s); border: none; }" %
-                    foreground.text().strip())
+            if forBackground: self.background = color
+            else: self.foreground = color
 
-            (textWindow.show
-             if textWindow.isHidden() else textWindow.activateWindow)()
+            generatedTextWindow.setStyleSheet(
+                f"QPlainTextEdit {{ background-color: rgba{self.background.getRgb()}; color: rgba{self.foreground.getRgb()}; border: none; }}"
+            )
 
-        layout, plainText, char = QGridLayout(self), QPlainTextEdit(
+        def resultReady(result: str) -> None:
+            (generatedTextWindow.show if generatedTextWindow.isHidden() else
+             generatedTextWindow.activateWindow)()
+            generatedTextWindow.setPlainText(result)
+            self.setDisabled(False)
+
+        def changeFont() -> None:
+            font = QFontDialog.getFont(changeFontButton.font())
+            if not font[1]: return
+
+            changeFontButton.setFont(font[0])
+            self.setFixedSize(self.sizeHint())
+
+        def process() -> None:
+            if not textBox.toPlainText().strip(): return
+
+            self.setDisabled(True)
+
+            pixmap = QPixmap(changeFontButton.fontMetrics().size(
+                0, textBox.toPlainText()))
+            painter = QPainter(pixmap)
+
+            painter.setFont(changeFontButton.font())
+            painter.fillRect(pixmap.rect(), Qt.GlobalColor.white)
+            painter.drawText(pixmap.rect(), 0, textBox.toPlainText())
+
+            painter.end()
+
+            processingThread.start(
+                QImage(
+                    pixmap.scaledToWidth(
+                        pixmap.width() * 2,
+                        Qt.TransformationMode.SmoothTransformation)))
+
+        layout, textBox, processButton = QVBoxLayout(self), QPlainTextEdit(
             "Hello World!",
             toolTip="Text goes here",
             textChanged=lambda: processButton.setDisabled(
-                not plainText.toPlainText().strip())), QLineEdit(
-                    "#",
-                    placeholderText="Character to use",
-                    toolTip="Character to use",
-                    maxLength=1)
-        alignment1, alignment2, fontSize = QComboBox(
-            toolTip="First alignment"), QComboBox(
-                toolTip="Second alignment"), QSpinBox(toolTip="Font size")
-        background, foreground, processButton = QLabel(
+                not textBox.toPlainText().strip())), QPushButton(
+                    "Process", clicked=process)
+        self.backgroundColor, self.foregroundColor, processingThread = QColor(
+            255, 255, 255), QColor(0, 0, 0), ProcessingThread(resultReady)
+        backgroundColorPicker, foregroundColorPicker, changeFontButton = QLabel(
             toolTip="Background color",
-            frameShape=QFrame.Shape.StyledPanel,
-            maximumSize=QSize(20, 20),
-            minimumSize=QSize(20, 20),
-            styleSheet="QLabel { color: transparent; }"), QLabel(
-                toolTip="Text color",
-                frameShape=QFrame.Shape.StyledPanel,
-                maximumSize=QSize(20, 20),
-                minimumSize=QSize(20, 20),
-                styleSheet="QLabel { color: transparent; }"), QPushButton(
-                    "Process",
-                    clicked=lambda: self.textThread.start(
-                        int(fontSize.text()),
-                        plainText.toPlainText().strip(),
-                        char.text().strip()))
-        self.textThread = TextThread(onReady, processButton.setDisabled)
+            frameShape=QLabel.Shape.StyledPanel,
+            styleSheet=
+            "QLabel { color: transparent; background-color: #FFFFFF; }"
+        ), QLabel(toolTip="Text color",
+                  frameShape=QLabel.Shape.StyledPanel,
+                  styleSheet=
+                  "QLabel { color: transparent; background-color: #000000; }"
+                  ), QPushButton("Change font",
+                                 clicked=changeFont,
+                                 toolTip="Change font",
+                                 font=QFont("Arial Black", 12))
 
-        alignment1.addItems([
-            "Center", "Absolute", "Baseline", "Bottom", "HCenter", "Justify",
-            "Leading", "Left", "Right", "Top", "Trailing", "VCenter"
-        ])
-        alignment2.addItems([
-            "Center", "Absolute", "Baseline", "Bottom", "HCenter", "Justify",
-            "Leading", "Left", "Right", "Top", "Trailing", "VCenter"
-        ])
-        background.mousePressEvent, foreground.mousePressEvent = lambda event: mousePressEvent(
-            True), lambda event: mousePressEvent()
-        alignment1.setCurrentIndex(1)
-        alignment2.setCurrentIndex(1)
-        fontSize.setRange(12, 128)
+        backgroundColorPicker.mousePressEvent, foregroundColorPicker.mousePressEvent = lambda event: changeColor(
+            True), lambda event: changeColor()
 
-        layout.addWidget(plainText, 0, 0, 1, 3)
-        layout.addWidget(alignment1, 1, 0)
-        layout.addWidget(alignment2, 2, 0)
-        layout.addWidget(fontSize, 1, 1)
-        layout.addWidget(char, 2, 1)
-        layout.addWidget(background, 1, 2)
-        layout.addWidget(foreground, 2, 2)
-        layout.addWidget(processButton, 3, 0, 1, 3)
+        layout.addWidget(textBox)
+        layout.addWidget(changeFontButton)
+        layout.addWidget(backgroundColorPicker)
+        layout.addWidget(foregroundColorPicker)
+        layout.addWidget(processButton)
 
-        self.setFixedSize(280, 300)
+        self.setFixedSize(self.sizeHint())
+        self.show()
+
+
+def contextMenuRequested(pos: QPoint) -> None:
+    menu = QMenu()
+
+    saveAction, toggleVerticalScrollBarAction, toggleHorizontalScrollBarAction = QAction(
+        "Save As",
+        shortcut=QKeySequence(QKeySequence.StandardKey.Save)), QAction(
+            "Hide or show vertical scroll bar"), QAction(
+                "Hide or show horizontal scroll bar")
+
+    menu.addAction(saveAction)
+    menu.addSeparator()
+    menu.addActions(
+        [toggleVerticalScrollBarAction, toggleHorizontalScrollBarAction])
+
+    action = menu.exec(generatedTextWindow.mapToGlobal(pos))
+    if not action: return
+
+    if action in {
+            toggleVerticalScrollBarAction, toggleHorizontalScrollBarAction
+    }:
+        return (
+            generatedTextWindow.setVerticalScrollBarPolicy
+            if action == toggleVerticalScrollBarAction else
+            generatedTextWindow.setHorizontalScrollBarPolicy
+        )(Qt.ScrollBarPolicy.ScrollBarAsNeeded if (
+            generatedTextWindow.verticalScrollBarPolicy if action ==
+            toggleVerticalScrollBarAction else generatedTextWindow.
+            horizontalScrollBarPolicy)() == Qt.ScrollBarPolicy.
+          ScrollBarAlwaysOff else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    saveGeneratedText()
+
+
+def saveGeneratedText() -> None:
+    file = QFileDialog.getSaveFileName(
+        filter=
+        f"Plain Text File (*.txt);; Image File ({'; '.join(f'*.{x.data().decode()}' for x in QImageWriter.supportedImageFormats())})"
+    )
+    if not file[0]: return
+
+    if file[1].startswith("Plain "):
+        file = QFile(file[0])
+
+        if not file.open(QFile.OpenModeFlag.WriteOnly):
+            return QMessageBox.critical(
+                generatedTextWindow, "Error",
+                f"Could not open the file: [{file.error()}] {file.errorString()}"
+            )
+
+        file.write(generatedTextWindow.toPlainText().encode("UTF-8"))
+
+        if file.error() != QFile.FileError.NoError:
+            QMessageBox.critical(
+                generatedTextWindow, "Error",
+                f"Could not write to file: [{file.error()}] {file.errorString()}"
+            )
+        else:
+            file.close()
+            QMessageBox.information(
+                generatedTextWindow, "Success",
+                f"Successfully saved to {file.fileName()}")
+
+        return
+
+    pixmap = QPixmap(generatedTextWindow.fontMetrics().size(
+        0, generatedTextWindow.toPlainText()))
+    painter = QPainter(pixmap)
+
+    painter.fillRect(pixmap.rect(), mainWindow.background)
+    painter.setFont(generatedTextWindow.font())
+    painter.setPen(mainWindow.foreground)
+
+    painter.drawText(pixmap.rect(), 0, generatedTextWindow.toPlainText())
+
+    painter.end()
+
+    if not pixmap.save(file[0], quality=100):
+        return QMessageBox.critical(generatedTextWindow, "Error",
+                                    f"Could not save to {file[0]}")
+
+    QMessageBox.information(generatedTextWindow, "Success",
+                            f"Successfully saved to {file[0]}")
 
 
 app = QApplication([], applicationName="ASCII Text Art Generator")
-main, textWindow = Main(), QTextEdit(
+
+mainWindow, generatedTextWindow = MainWindow(), QPlainTextEdit(
     windowTitle="Generated ASCII Text Art",
     readOnly=True,
-    lineWrapMode=QTextEdit.LineWrapMode.NoWrap,
-    font=QFont("Consolas"),
-    styleSheet="QTextEdit { border: none; }")
-main.show()
+    lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap,
+    font=QFont("Consolas", 12),
+    styleSheet="QPlainTextEdit { border: none; }",
+    contextMenuPolicy=Qt.ContextMenuPolicy.CustomContextMenu,
+    customContextMenuRequested=contextMenuRequested)
+QShortcut(QKeySequence(QKeySequence.StandardKey.Save), generatedTextWindow,
+          saveGeneratedText)
+
 app.exec()
