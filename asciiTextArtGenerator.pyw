@@ -30,10 +30,10 @@ class ProcessingThread(QThread):
 
     def run(self) -> None:
         self.onResultReady.emit("".join(
-            w.rstrip() + "\n" for w in ("".join(
+            (w + "\n") for w in ("".join(
                 self.asciiCharacters[self.image.pixelColor(x, y).value() // 25]
                 for x in range(self.image.width()))
-                                        for y in range(self.image.height()))
+                                 for y in range(self.image.height()))
             if w.strip()))
 
 
